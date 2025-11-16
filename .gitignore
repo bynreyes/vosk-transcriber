@@ -1,0 +1,24 @@
+# Ignorar carpetas y archivos generados
+/build/
+/.gradle/
+/out/
+
+# Modelos Vosk (pesados)
+/models/
+
+# Transcripciones generadas
+/transcriptions/
+
+# IDE
+/.idea/
+*.iml
+*.kts
+*.bat
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Gradle wrapper
+gradle/wrapper/gradle-wrapper.jar
+
