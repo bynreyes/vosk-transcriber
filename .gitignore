@@ -1,7 +1,7 @@
 # Ignorar carpetas y archivos generados
 /build/
 /.gradle/
-/out/
+/bin/
 
 # Modelos Vosk (pesados)
 /models/
