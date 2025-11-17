@@ -60,9 +60,16 @@ Mientras se transcribe en tiempo real, las frases completas se mostrarán por co
 
 Estructura del proyecto (resumen) 🗂️
 ---------------------------------
-- `src/main/java/...` : código fuente Java
-- `models/`           : modelos Vosk (no incluido por licencia)
-- `transcriptions/`   : carpeta donde se guardan los textos generados
+- `src/main/java/...`  : código fuente Java
+- `models/`            : modelos Vosk (no incluido por licencia)
+- `transcriptions/`    : carpeta donde se guardan los textos generados
+- `\src\main\resources`: recursos como audios de prueba, archivo de configuraciones, otros           
+
+Pendiente (proximo semestre) 🛠️
+------------------
+1. Pruebas Unitarias.
+2. Javadoc.
+3. Archivo unico de configuracion.
 
 Roadmap / Características propuestas 🛣️
 ------------------------------------
@@ -71,7 +78,6 @@ Ideas a Considerar 🚧
   - Seleccionar archivos o carpetas
   - Iniciar/parar transcripción en tiempo real
   - Visualizar y editar las transcripciones
-- 🎙️ Detección de interlocutores (speaker diarization)
 - 📝 Generar un resumen automático del contenido del audio o conversación
 - 🧾 Integración con una plantilla de Writer para su posterior edicion.
 - 🧾 considerar otros formatos, html, MarckDown, etc.
@@ -79,6 +85,7 @@ Ideas a Considerar 🚧
 Ideas a medio plazo ⚙️
 - 🌍 Soporte multi-idioma con selección de modelo
 - ✍️ Mejor gestión de puntuación y mayúsculas a partir del texto bruto
+- 🎙️ Detección de interlocutores (speaker diarization)
 - ⏱️ Marcas de tiempo por frase y exportación a formatos con timestamps (subtitulos, archivos .srt)
 
 Prioritario 🔥
