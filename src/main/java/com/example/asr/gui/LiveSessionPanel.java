@@ -7,7 +7,8 @@ package com.example.asr.gui;
 
 //import com.example.asr.gui.components.ToggleSwitch;
 import com.example.asr.transcriber.MicTranscriber;
-import com.example.asr.vosk.VoskService;
+import com.example.asr.config.AppConfig;
+import com.example.asr.util.FileManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,7 +16,9 @@ import javax.swing.*;
 import javax.sound.sampled.LineUnavailableException;
 import java.awt.*;
 import java.io.IOException;
-import java.util.concurrent.atomic.AtomicReference;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 
 /**
  *
@@ -24,12 +27,26 @@ import java.util.concurrent.atomic.AtomicReference;
 
 public class LiveSessionPanel extends javax.swing.JPanel {
 
+    private static final Logger logger = LoggerFactory.getLogger(LiveSessionPanel.class);
+
+    // Paleta de colores solicitada
+    private static final Color COLOR_BG_1 = new Color(212,224,155);
+    private static final Color COLOR_BG_2 = new Color(246,244,210);
+    private static final Color COLOR_BG_3 = new Color(203,223,189);
+    private static final Color COLOR_ACCENT = new Color(241,156,121);
+    private static final Color COLOR_TEXT = new Color(70,63,58);
+
     /**
      * Creates new form LiveSessionPanel
      */
     public LiveSessionPanel(MainFrame mainFrame) {
                 initComponents();
-               
+                // Aplicar paleta desde AppConfig
+                this.setBackground(AppConfig.COLOR_BG_2);
+                textArea.setBackground(Color.WHITE);
+                textArea.setForeground(AppConfig.COLOR_TEXT);
+                jToggleButton.setBackground(AppConfig.COLOR_ACCENT);
+                jToggleButton.setForeground(AppConfig.COLOR_TEXT);
     }
 
     /**
@@ -48,20 +65,11 @@ public class LiveSessionPanel extends javax.swing.JPanel {
         setBackground(new java.awt.Color(246, 244, 210));
 
         jToggleButton.setBackground(new java.awt.Color(241, 156, 121));
-        jToggleButton.setFont(new java.awt.Font("Segoe UI Semibold", 1, 12)); // NOI18N
+        jToggleButton.setFont(new java.awt.Font("Segoe UI Semibold", Font.BOLD, 12)); // NOI18N
         jToggleButton.setForeground(new java.awt.Color(70, 63, 58));
         jToggleButton.setSelected(false);
         jToggleButton.setText("OFF");
-        jToggleButton.addMouseListener(new java.awt.event.MouseAdapter() {
-            public void mouseClicked(java.awt.event.MouseEvent evt) {
-                jToggleButtonMouseClicked(evt);
-            }
-        });
-        jToggleButton.addActionListener(new java.awt.event.ActionListener() {
-            public void actionPerformed(java.awt.event.ActionEvent evt) {
-                jToggleButtonActionPerformed(evt);
-            }
-        });
+        jToggleButton.addActionListener(this::jToggleButtonActionPerformed);
 
         textArea.setColumns(20);
         textArea.setRows(10);
@@ -92,29 +100,17 @@ public class LiveSessionPanel extends javax.swing.JPanel {
         );
     }// </editor-fold>//GEN-END:initComponents
 
-    
-    private void jToggleButtonMouseClicked(java.awt.event.MouseEvent evt) {//GEN-FIRST:event_jToggleButtonMouseClicked
-        // TODO add your handling code here:
-        
-        if (jToggleButton.isSelected()){
+    private void jToggleButtonActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_jToggleButtonActionPerformed
+        // Toggle inmediato: iniciar o detener según estado
+        if (jToggleButton.isSelected()) {
             jToggleButton.setOpaque(true);
             jToggleButton.setText("ON");
-            jToggleButton.setBackground(new Color(212,224,155));
-            startTranscripcion();    
-            
+            jToggleButton.setBackground(COLOR_BG_1);
+            startSession();
         } else {
-            stopTranscripcion();
+            stopSession();
         }
-        
-       
-    }//GEN-LAST:event_jToggleButtonMouseClicked
-
-    private void jToggleButtonActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_jToggleButtonActionPerformed
-        // TODO add your handling code here:
-         
-        
     }//GEN-LAST:event_jToggleButtonActionPerformed
-
 
     // Variables declaration - do not modify//GEN-BEGIN:variables
     private javax.swing.JToggleButton jToggleButton;
@@ -123,8 +119,49 @@ public class LiveSessionPanel extends javax.swing.JPanel {
     // End of variables declaration//GEN-END:variables
 
     // Worker y transcriptor activos
-    private transient com.example.asr.transcriber.MicTranscriber transcriber;
+    private transient MicTranscriber transcriber;
     private transient javax.swing.SwingWorker<Void, String> worker;
+
+    // Método público para iniciar sesión
+    public void startSession() {
+        startTranscripcion();
+    }
+
+    // Método público para detener sesión
+    public void stopSession() {
+        stopTranscripcion();
+    }
+
+    /**
+     * Limpia el área de transcripción.
+     */
+    public void clearTranscription() {
+        textArea.setText("");
+        logger.info("Transcripción limpiada");
+    }
+
+    /**
+     * Guarda la sesión actual con un nombre personalizado.
+     */
+    public boolean saveSession(String sessionName) {
+        if (sessionName == null || sessionName.trim().isEmpty()) return false;
+        try {
+            Path dest = FileManager.resolveSessionFile(sessionName);
+            FileManager.saveTranscription(dest, textArea.getText());
+            return true;
+        } catch (IOException e) {
+            logger.error("Error guardando sesión", e);
+            textArea.append("Error guardando sesión: " + e.getMessage() + "\n");
+            return false;
+        }
+    }
+
+    /**
+     * Obtiene la transcripción actual.
+     */
+    public String getCurrentTranscription() {
+        return textArea.getText();
+    }
 
     private void startTranscripcion() {
         // Evitar múltiples workers
@@ -133,27 +170,47 @@ public class LiveSessionPanel extends javax.swing.JPanel {
         try {
             transcriber = new MicTranscriber(MainFrame.getVoskService());
         } catch (Exception e) {
-            textArea.append("No se pudo inicializar el servicio Vosk: " + e.getMessage() + "\n");
+            textArea.append("No se pudo inicializar Vosk: " + e.getMessage() + "\n");
+            logger.error("Error inicializando MicTranscriber", e);
             return;
         }
 
-        // recomendado para no bloquear la interfaz
+        // Obtener ruta de archivo de salida
+        Path outputFile;
+        try {
+            outputFile = FileManager.getLiveTranscriptionFile();
+        } catch (IOException e) {
+            textArea.append("No se pudo crear carpeta de transcripciones: " + e.getMessage() + "\n");
+            logger.error("Error creando directorio de transcripciones", e);
+            return;
+        }
+
+        // Crear SwingWorker para ejecución asíncrona
+        final Path finalOutputFile = outputFile;
         worker = new SwingWorker<Void, String>() {
 
             @Override
-            protected Void doInBackground() throws Exception {
+            protected Void doInBackground() {
                 try {
                     transcriber.startTranscription(text -> {
                         if (text != null && !text.isEmpty()) {
                             publish(text); // Enviar a UI thread
+                            // Escribir en archivo
+                            try {
+                                FileManager.appendTranscription(finalOutputFile, text);
+                            } catch (IOException e) {
+                                logger.error("Error escribiendo transcripción", e);
+                                publish("ERROR escribiendo archivo: " + e.getMessage());
+                            }
                         }
                     });
                 } catch (LineUnavailableException | IOException e) {
+                    logger.error("Error en transcripción", e);
                     publish("ERROR: " + e.getMessage());
                 } catch (Exception e) {
+                    logger.error("Error inesperado en transcripción", e);
                     publish("ERROR inesperado: " + e.getMessage());
                 }
-
                 return null;
             }
 
@@ -163,30 +220,46 @@ public class LiveSessionPanel extends javax.swing.JPanel {
                     textArea.append(">>> " + text + "\n");
                 }
             }
-
         };
 
         worker.execute();
         textArea.append("[Transcripción iniciada]\n");
-
     }
 
     private void stopTranscripcion() {
-        // detener el transcriptor y cancelar worker
-        try {
-            if (transcriber != null) {
-                transcriber.stop();
-            }
-        } catch (Exception e) {
-            textArea.append("Error al detener transcripción: " + e.getMessage() + "\n");
+        logger.info("Deteniendo transcripción...");
+
+        // Marcar transcriptor para detener (no bloqueante)
+        if (transcriber != null) {
+            transcriber.stop();
         }
 
+        // Esperar a que el SwingWorker termine en un hilo background
+        // para NO bloquear la UI
         if (worker != null && !worker.isDone()) {
-            worker.cancel(true);
+            new Thread(() -> {
+                try {
+                    worker.get(AppConfig.SWING_WORKER_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS);
+                    logger.info("SwingWorker terminó correctamente");
+                } catch (java.util.concurrent.TimeoutException e) {
+                    logger.warn("Timeout esperando término del worker, cancelando...");
+                    worker.cancel(true);
+                } catch (Exception e) {
+                    logger.warn("Error esperando término del worker: {}", e.getMessage());
+                }
+            }).start();
         }
 
-        jToggleButton.setText("OFF");
-        jToggleButton.setBackground(new Color(241,156,121));
-        textArea.append("[Transcripción detenida]\n");
+        // Actualizar UI inmediatamente (sin esperar)
+        if (jToggleButton != null) {
+            jToggleButton.setSelected(false);
+            jToggleButton.setText("OFF");
+            jToggleButton.setOpaque(false);
+            jToggleButton.setBackground(AppConfig.COLOR_ACCENT);
+        }
+
+        textArea.append("[Transcripción pausada]\n");
+        logger.info("Transcripción pausada correctamente");
     }
+
 }

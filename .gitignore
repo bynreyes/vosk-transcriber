@@ -13,7 +13,17 @@
 /.idea/
 *.iml
 *.kts
+
 *.bat
+*.log
+*.tmp
+
+# Audio files
+*.m4a
+*.wav
+*.mp3
+*.ogg
+*.flac
 
 # Sistema
 .DS_Store

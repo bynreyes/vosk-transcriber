@@ -1,7 +1,9 @@
 package com.example.asr.transcriber;
 
+import com.example.asr.exception.TranscriptionException;
 import com.example.asr.util.AudioConverter;
 import com.example.asr.util.AudioUtils;
+import com.example.asr.util.FFmpegAudioConverter;
 import com.example.asr.vosk.VoskService;
 import org.json.JSONObject;
 import org.slf4j.Logger;
@@ -9,14 +11,24 @@ import org.slf4j.LoggerFactory;
 import org.vosk.Recognizer;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
 /**
  * Transcriptor para archivos de audio.
- * Soporta conversión automática de .m4a a .wav y transcripción con Vosk.
+ * <p>
+ * Implementa la interfaz {@link Transcriber} para proporcionar transcripción
+ * desde archivos de audio. Soporta conversión automática de diversos formatos
+ * (M4A, MP3, AAC, etc.) a WAV mediante FFmpeg.
+ * </p>
+ *
+ * @author by-nreyes, nelson ruiz
+ * @version 1.0
+ * @see Transcriber
+ * @see AudioConverter
  */
-public class FileTranscriber {
+public class FileTranscriber implements Transcriber {
     private static final Logger logger = LoggerFactory.getLogger(FileTranscriber.class);
     
     private final VoskService voskService;
@@ -25,55 +37,69 @@ public class FileTranscriber {
     // Tamaño del buffer para leer el audio (4KB)
     private static final int BUFFER_SIZE = 4096;
     
+    /**
+     * Crea una instancia de transcriptor de archivos.
+     *
+     * @param voskService servicio Vosk para crear reconocedores
+     */
     public FileTranscriber(VoskService voskService) {
         this.voskService = voskService;
-        this.audioConverter = new AudioConverter();
+        this.audioConverter = new FFmpegAudioConverter();
+    }
+
+    /**
+     * Crea una instancia de transcriptor con convertidor personalizado.
+     * <p>
+     * Útil para testing o si se desea usar una implementación alternativa
+     * de conversor de audio.
+     * </p>
+     *
+     * @param voskService servicio Vosk para crear reconocedores
+     * @param audioConverter conversor de audio personalizado
+     */
+    public FileTranscriber(VoskService voskService, AudioConverter audioConverter) {
+        this.voskService = voskService;
+        this.audioConverter = audioConverter;
     }
 
     /**
      * Transcribe un archivo de audio a texto.
-     * Si el archivo es .m4a, lo convierte automáticamente a .wav.
-     * 
-     * @param audioPath ruta al archivo de audio
-     * @return texto transcrito
-     * @throws IOException si hay errores de lectura/conversión
+     * <p>
+     * Si el archivo no está en formato WAV, lo convierte automáticamente
+     * usando FFmpeg.
+     * </p>
+     *
+     * @param audioPath ruta al archivo de audio a transcribir
+     * @return texto transcrito del audio
+     * @throws IOException si hay errores de lectura o conversión
+     * @throws TranscriptionException si hay errores durante la transcripción
      */
-    public String transcribe(Path audioPath) throws IOException {
+    @Override
+    public String transcribe(Path audioPath) throws IOException, TranscriptionException {
         logger.info("Iniciando transcripción de: {}", audioPath);
 
         Path wavPath = audioPath;
         boolean needsCleanup = false;
 
         // Verificar si necesita conversión
-        String fileName = audioPath.getFileName().toString().toLowerCase();
-        if (fileName.endsWith(".m4a") || fileName.endsWith(".mp4") ||
-            fileName.endsWith(".mp3") || fileName.endsWith(".aac")) {
-
+        if (audioConverter.requiresConversion(audioPath)) {
             logger.info("Detectado formato no-WAV, convirtiendo a WAV...");
 
-            // Convertir a WAV temporal
-            wavPath = Paths.get(audioPath.toString() + ".temp.wav");
-            audioConverter.convertToWav(audioPath, wavPath);
-            needsCleanup = true;
-
-            logger.info("Conversión completada: {}", wavPath);
+            try {
+                wavPath = audioConverter.convertToWav(audioPath);
+                needsCleanup = true;
+                logger.info("Conversión completada: {}", wavPath);
+            } catch (IOException e) {
+                logger.error("Error convirtiendo archivo: {}", e.getMessage());
+                throw e;
+            }
         }
 
         try {
             // Validar formato WAV
             if (!AudioUtils.isValidWavFormat(wavPath)) {
-                logger.warn("El archivo WAV no tiene el formato correcto, intentando re-convertir...");
-
-                Path reconvertedPath = Paths.get(wavPath.toString() + ".reconverted.wav");
-                audioConverter.convertToWav(wavPath, reconvertedPath);
-
-                // Limpiar archivo intermedio si fue convertido
-                if (needsCleanup) {
-                    wavPath.toFile().delete();
-                }
-
-                wavPath = reconvertedPath;
-                needsCleanup = true;
+                logger.warn("El archivo WAV no tiene el formato correcto");
+                throw new IOException("Formato WAV inválido después de conversión");
             }
 
             // Realizar transcripción
@@ -83,9 +109,26 @@ public class FileTranscriber {
             // Limpiar archivo temporal si fue creado
             if (needsCleanup && wavPath.toFile().exists()) {
                 logger.debug("Eliminando archivo temporal: {}", wavPath);
-                wavPath.toFile().delete();
+                try {
+                    Files.delete(wavPath);
+                } catch (IOException e) {
+                    logger.warn("No se pudo eliminar archivo temporal: {}", wavPath, e);
+                }
             }
         }
+    }
+
+    /**
+     * Detiene la transcripción (no aplica para archivos).
+     * <p>
+     * Este método es un no-op para archivos ya que la transcripción
+     * es síncrona y completamente controlada por el método {@link #transcribe(Path)}.
+     * </p>
+     */
+    @Override
+    public void stop() {
+        // No-op para transcriptor de archivos
+        logger.debug("stop() llamado en FileTranscriber (no-op)");
     }
 
     /**
@@ -98,55 +141,46 @@ public class FileTranscriber {
     private String performTranscription(Path wavPath) throws IOException {
         logger.info("Procesando audio con Vosk...");
 
-        Recognizer recognizer = voskService.createRecognizer();
-        StringBuilder transcription = new StringBuilder();
+        try (var audioStream = AudioUtils.openWavInputStream(wavPath)) {
+            Recognizer recognizer = voskService.createRecognizer();
 
-        try {
-            // Leer audio en chunks y alimentar al reconocedor
-            byte[] buffer = new byte[BUFFER_SIZE];
-            int totalBytesRead = 0;
-
-            try (var audioStream = AudioUtils.openWavInputStream(wavPath)) {
+            try {
+                byte[] buffer = new byte[BUFFER_SIZE];
+                StringBuilder result = new StringBuilder();
                 int bytesRead;
 
                 while ((bytesRead = audioStream.read(buffer)) != -1) {
-                    totalBytesRead += bytesRead;
-
-                    // Alimentar bytes al reconocedor
                     if (recognizer.acceptWaveForm(buffer, bytesRead)) {
-                        // Resultado parcial (frase completada)
-                        String result = recognizer.getResult();
-                        String text = extractText(result);
-
+                        // Frase completada
+                        String partialResult = recognizer.getResult();
+                        String text = extractText(partialResult);
                         if (!text.isEmpty()) {
-                            transcription.append(text).append(" ");
-                            logger.debug("Resultado parcial: {}", text);
+                            if (result.length() > 0) result.append(" ");
+                            result.append(text);
                         }
                     }
                 }
 
-                // Obtener resultado final (último fragmento)
+                // Obtener resultado final
                 String finalResult = recognizer.getFinalResult();
                 String finalText = extractText(finalResult);
-
                 if (!finalText.isEmpty()) {
-                    transcription.append(finalText);
+                    if (result.length() > 0) result.append(" ");
+                    result.append(finalText);
                 }
 
-                logger.info("Audio procesado: {} bytes leídos", totalBytesRead);
+                logger.info("Audio procesado: {} bytes leídos",
+                    wavPath.toFile().length());
+
+                return result.toString();
+
+            } finally {
+                recognizer.close();
             }
 
-            String result = transcription.toString().trim();
-
-            if (result.isEmpty()) {
-                logger.warn("No se detectó ningún texto en el audio");
-                return "[Sin transcripción - no se detectó voz o modelo incompatible con el idioma del audio]";
-            }
-
-            return result;
-
-        } finally {
-            recognizer.close();
+        } catch (IOException e) {
+            logger.error("Error leyendo archivo WAV: {}", e.getMessage());
+            throw e;
         }
     }
 
@@ -161,7 +195,7 @@ public class FileTranscriber {
             JSONObject json = new JSONObject(jsonResult);
             return json.optString("text", "");
         } catch (Exception e) {
-            logger.warn("Error al parsear resultado JSON: {}", jsonResult, e);
+            logger.debug("Error al parsear resultado: {}", jsonResult);
             return "";
         }
     }

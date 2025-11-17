@@ -6,7 +6,7 @@ package com.example.asr.gui;
 
 /**
  *
- * @author bynre
+ * @author by-nreyes
  */
 public class BatchPanel extends javax.swing.JPanel {
 

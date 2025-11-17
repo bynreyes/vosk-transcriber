@@ -1,5 +1,7 @@
 package com.example.asr.transcriber;
 
+import com.example.asr.config.AppConfig;
+import com.example.asr.exception.TranscriptionException;
 import com.example.asr.vosk.VoskService;
 import org.json.JSONObject;
 import org.slf4j.Logger;
@@ -8,44 +10,112 @@ import org.vosk.Recognizer;
 
 import javax.sound.sampled.*;
 import java.io.IOException;
+import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.Consumer;
 
 /**
  * Transcriptor de audio en tiempo real desde micrófono.
- * Captura audio usando Java Sound API y lo procesa con Vosk.
+ * <p>
+ * Implementa la interfaz {@link Transcriber} para proporcionar transcripción
+ * desde el micrófono del sistema en tiempo real.
+ * Captura audio continuamente del micrófono usando Java Sound API
+ * y lo procesa en tiempo real con el motor de reconocimiento Vosk.
+ * </p>
+ * <p>
+ * Características:
+ * <ul>
+ *   <li>Captura de audio en 16 kHz mono (configurado en application.yml)</li>
+ *   <li>Reconocimiento en tiempo real con resultados parciales y finales</li>
+ *   <li>Soporte para callbacks personalizados</li>
+ *   <li>Inicio/parada segura desde múltiples threads</li>
+ * </ul>
+ * </p>
+ *
+ * @author by-nreyes, nelson ruiz
+ * @version 1.0
+ * @see Transcriber
+ * @see VoskService
+ * @see AppConfig
  */
-public class MicTranscriber {
+public class MicTranscriber implements Transcriber {
     private static final Logger logger = LoggerFactory.getLogger(MicTranscriber.class);
     
     private final VoskService voskService;
     
-    // Configuración de audio para captura desde micrófono
-    private static final float SAMPLE_RATE = 16000.0f;
-    private static final int SAMPLE_SIZE_BITS = 16;
-    private static final int CHANNELS = 1; // Mono
+    // Configuración de audio desde AppConfig
+    /** Tasa de muestreo: 16 kHz (requerida por Vosk) */
+    private static final float SAMPLE_RATE = AppConfig.AUDIO_SAMPLE_RATE;
+    /** Profundidad de bits: 16 bits (requerida por Vosk) */
+    private static final int SAMPLE_SIZE_BITS = AppConfig.AUDIO_SAMPLE_SIZE_BITS;
+    /** Canales de audio: mono (requerida por Vosk) */
+    private static final int CHANNELS = AppConfig.AUDIO_CHANNELS;
+    /** Formato signed: true (requerida por Vosk) */
     private static final boolean SIGNED = true;
-    private static final boolean BIG_ENDIAN = false; // Little-endian
-    
-    // Tamaño del buffer de captura (0.1 segundos)
-    private static final int BUFFER_SIZE = (int)(SAMPLE_RATE * SAMPLE_SIZE_BITS / 8 * CHANNELS * 0.1);
-    
-    // Estado de ejecución para permitir detener la transcripción
-    private volatile boolean running = false;
+    /** Orden de bytes: little-endian (requerida por Vosk) */
+    private static final boolean BIG_ENDIAN = false;
 
-    // Guardamos las referencias para poder detener desde otra hebra
+    /** Tamaño del buffer de lectura de audio */
+    private static final int BUFFER_SIZE = AppConfig.AUDIO_BUFFER_SIZE;
+
+    /** Sleep cuando no hay datos del micrófono (milisegundos) */
+    private static final int READ_SLEEP_NANOS = AppConfig.MICROPHONE_READ_SLEEP_MS * 1_000_000;
+
+    /** Estado de ejecución - usado para control de threads */
+    private final AtomicBoolean running = new AtomicBoolean(false);
+
+    /** Línea de captura del micrófono */
     private TargetDataLine microphone;
+    /** Reconocedor Vosk actual */
     private Recognizer recognizer;
 
+    /**
+     * Crea una instancia de transcriptor de micrófono.
+     *
+     * @param voskService instancia del servicio Vosk para crear reconocedores
+     * @throws NullPointerException si voskService es null
+     */
     public MicTranscriber(VoskService voskService) {
         this.voskService = voskService;
     }
     
     /**
      * Inicia la transcripción en tiempo real desde el micrófono.
-     * Este método es bloqueante y continúa hasta que se detiene el programa (Ctrl+C).
-     * 
+     * <p>
+     * Este método implementa la interfaz {@link Transcriber}.
+     * El parámetro `source` se ignora para micrófono (siempre null).
+     * </p>
+     *
+     * @param source ignorado para micrófono (puede ser null)
+     * @return vacío (la transcripción ocurre mediante callbacks)
+     * @throws IOException si no se puede acceder al micrófono
+     * @throws TranscriptionException si ocurren errores durante la transcripción
+     */
+    @Override
+    public String transcribe(Path source) throws IOException, TranscriptionException {
+        try {
+            startTranscription();
+            return ""; // La transcripción en micrófono es asíncrona via callbacks
+        } catch (LineUnavailableException | IOException e) {
+            // Ambos errores se consideran errores de micrófono/inicialización
+            throw new TranscriptionException("Error iniciando transcripción de micrófono",
+                TranscriptionException.ErrorType.MICROPHONE_ERROR, null, e);
+        }
+    }
+
+    /**
+     * Inicia la transcripción en tiempo real desde el micrófono.
+     * <p>
+     * Este método es un wrapper que delega a {@link #startTranscription(Consumer)}
+     * con un callback que imprime en consola.
+     * </p>
+     *
      * @throws LineUnavailableException si no se puede acceder al micrófono
-     * @throws IOException si no se puede crear el Recognizer
+     * @throws IOException si ocurren errores de E/S
+     * @throws IllegalStateException si la transcripción ya está en ejecución
+     *
+     * @see #startTranscription(Consumer)
      */
     public void startTranscription() throws LineUnavailableException, IOException {
         // Mantener compatibilidad: delegar a la versión con Consumer que imprime en consola
@@ -57,10 +127,31 @@ public class MicTranscriber {
     }
 
     /**
-     * Versión de startTranscription que acepta un consumidor que recibe cada transcripción completa
-     * (y la transcripción final cuando se detiene).
+     * Inicia la transcripción en tiempo real desde el micrófono con callback personalizado.
+     * <p>
+     * El método captura audio continuamente hasta que se llame a {@link #stop()}.
+     * Invoca el callback para cada frase completa detectada.
+     * </p>
+     * <p>
+     * Thread-safety: Este método es seguro para ser llamado desde múltiples threads.
+     * Utiliza {@link AtomicBoolean} para sincronización sin locks bloqueantes.
+     * </p>
+     *
+     * @param textConsumer consumidor que recibe las transcripciones completas
+     * @throws LineUnavailableException si no se puede acceder al micrófono
+     * @throws IOException si ocurren errores de E/S durante la inicialización
+     * @throws IllegalStateException si la transcripción ya está en ejecución
+     *
+     * @see #stop()
+     * @see Consumer
      */
     public void startTranscription(Consumer<String> textConsumer) throws LineUnavailableException, IOException {
+        // Usar compareAndSet para atomicidad: solo retorna true si era false
+        if (!running.compareAndSet(false, true)) {
+            logger.warn("startTranscription llamado pero ya se está ejecutando");
+            return;
+        }
+
         // Configurar formato de audio
         AudioFormat format = new AudioFormat(
             SAMPLE_RATE,
@@ -78,11 +169,11 @@ public class MicTranscriber {
         
         if (!AudioSystem.isLineSupported(info)) {
             String error = String.format(
-                "El formato de audio no está soportado por tu tarjeta de sonido.\n" +
-                "Formato requerido: %.0f Hz, %d bits, mono.\n" +
-                "Posibles soluciones:\n" +
-                "  1. Verifica que el micrófono esté conectado y habilitado\n" +
-                "  2. Actualiza los drivers de audio\n" +
+                "El formato de audio no está soportado por tu tarjeta de sonido.%n" +
+                "Formato requerido: %.0f Hz, %d bits, mono.%n" +
+                "Posibles soluciones:%n" +
+                "  1. Verifica que el micrófono esté conectado y habilitado%n" +
+                "  2. Actualiza los drivers de audio%n" +
                 "  3. Prueba con otro dispositivo de entrada",
                 SAMPLE_RATE, SAMPLE_SIZE_BITS
             );
@@ -96,7 +187,8 @@ public class MicTranscriber {
         try {
             // Abrir línea del micrófono
             microphone = (TargetDataLine) AudioSystem.getLine(info);
-            microphone.open(format, BUFFER_SIZE);
+            // abrir con un buffer interno algo mayor para evitar lecturas parciales
+            microphone.open(format, BUFFER_SIZE * 2);
             microphone.start();
             
             logger.info("Micrófono abierto y capturando...");
@@ -107,42 +199,21 @@ public class MicTranscriber {
             // Buffer para leer audio
             byte[] buffer = new byte[BUFFER_SIZE];
             
-            // Registrar hook para limpieza con Ctrl+C
-            final Consumer<String> finalConsumer = textConsumer;
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                logger.info("\nDeteniendo transcripción por shutdown hook...");
-                try {
-                    stop();
-                } catch (Exception e) {
-                    logger.debug("Error durante stop en shutdown hook", e);
-                }
-                if (recognizer != null) {
-                    try {
-                        String finalResult = recognizer.getFinalResult();
-                        String finalText = extractText(finalResult);
-                        if (!finalText.isEmpty()) {
-                            try {
-                                finalConsumer.accept(finalText);
-                            } catch (Exception e) {
-                                logger.error("Error en el consumidor al escribir la transcripción final", e);
-                            }
-                            System.out.println("\nTexto final: " + finalText);
-                        }
-                    } catch (Exception e) {
-                        logger.debug("No se pudo obtener resultado final", e);
-                    }
-                }
-            }));
-            
             // Loop principal de captura y transcripción
-            running = true;
-            while (running) {
+            while (running.get()) {
                 // Leer datos del micrófono
                 int bytesRead = microphone.read(buffer, 0, buffer.length);
                 
-                if (bytesRead > 0) {
+                if (bytesRead <= 0) {
+                    // evitar busy loop si no hay datos; usar parkNanos en lugar de Thread.sleep
+                    LockSupport.parkNanos(READ_SLEEP_NANOS); // Sleep configurable
+                    continue;
+                }
+
+                try {
                     // Alimentar bytes al reconocedor
-                    if (recognizer.acceptWaveForm(buffer, bytesRead)) {
+                    boolean phraseCompleted = recognizer.acceptWaveForm(buffer, bytesRead);
+                    if (phraseCompleted) {
                         // Resultado parcial disponible (frase completa detectada)
                         String result = recognizer.getResult();
                         String text = extractText(result);
@@ -167,6 +238,12 @@ public class MicTranscriber {
                             System.out.flush();
                         }
                     }
+                } catch (Throwable t) {
+                    // Capturamos cualquier error nativo inesperado y terminamos la sesión de forma limpia
+                    logger.error("Error interno en recognizer durante acceptWaveForm: {}", t.toString());
+                    // Intentar detener de forma segura
+                    running.set(false);
+                    break;
                 }
             }
             
@@ -178,8 +255,12 @@ public class MicTranscriber {
             // Limpiar recursos
             // Limpieza en finally
             if (microphone != null && microphone.isOpen()) {
-                microphone.stop();
-                microphone.close();
+                try {
+                    microphone.stop();
+                    microphone.close();
+                } catch (Exception e) {
+                    logger.debug("Error cerrando microfono en finalmente", e);
+                }
                 logger.info("Micrófono cerrado");
             }
             
@@ -189,42 +270,106 @@ public class MicTranscriber {
                 } catch (Exception e) {
                     logger.debug("Error cerrando recognizer", e);
                 }
+                recognizer = null;
             }
+            running.set(false);
         }
     }
 
     /**
      * Solicita la detención de la transcripción en curso y cierra recursos.
+     * <p>
+     * Este método detiene de forma segura la captura de audio y libera recursos.
+     * El orden es importante:
+     * 1. Marcar como no ejecutando (detiene el loop principal)
+     * 2. Cerrar micrófono (detiene captura de audio)
+     * 3. Obtener resultado final del recognizer
+     * 4. Cerrar recognizer
+     * </p>
      */
     public void stop() {
-        running = false;
+        logger.info("Deteniendo transcripción...");
+        running.set(false);
 
-        // Cerrar la línea del micrófono si está abierta
+        // Dar un tiempo mínimo para que el loop principal se detenga
         try {
-            if (microphone != null && microphone.isOpen()) {
-                microphone.stop();
-                microphone.close();
-            }
-        } catch (Exception e) {
-            logger.debug("Error cerrando micrófono en stop()", e);
+            Thread.sleep(100);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
 
-        // Obtener resultado final y cerrar recognizer
-        try {
-            if (recognizer != null) {
-                String finalResult = recognizer.getFinalResult();
-                String finalText = extractText(finalResult);
-                if (!finalText.isEmpty()) {
-                    System.out.println("\nTexto final: " + finalText);
+        closeMicrophone();
+        closeRecognizer();
+        logger.info("Transcripción detenida");
+    }
+
+    /**
+     * Cierra el micrófono de forma segura.
+     * <p>
+     * Siempre se ejecuta primero para detener la captura de audio.
+     * </p>
+     */
+    private void closeMicrophone() {
+        if (microphone != null) {
+            try {
+                if (microphone.isOpen()) {
+                    microphone.stop();
+                    microphone.close();
+                    logger.debug("Micrófono cerrado");
                 }
-                recognizer.close();
-                recognizer = null;
+            } catch (Exception e) {
+                logger.debug("Error cerrando micrófono: {}", e.getMessage());
+            } finally {
+                microphone = null;
             }
-        } catch (Exception e) {
-            logger.debug("Error cerrando recognizer en stop()", e);
         }
     }
-    
+
+    /**
+     * Cierra el reconocedor de forma segura y obtiene resultado final.
+     * <p>
+     * IMPORTANTE: Solo se llama DESPUÉS de que el micrófono está cerrado
+     * para evitar intentar procesar datos que ya no existen.
+     * </p>
+     */
+    private void closeRecognizer() {
+        if (recognizer != null) {
+            try {
+                // Obtener resultado final SOLO si el recognizer está disponible
+                try {
+                    String finalResult = recognizer.getFinalResult();
+                    String finalText = extractText(finalResult);
+                    if (!finalText.isEmpty()) {
+                        System.out.println("\nTexto final: " + finalText);
+                    }
+                } catch (Exception e) {
+                    // Si falla obtener resultado final, solo loguear sin bloquear
+                    logger.debug("No se pudo obtener resultado final: {}", e.getMessage());
+                }
+
+                // Cerrar recognizer
+                try {
+                    recognizer.close();
+                    logger.debug("Reconocedor cerrado");
+                } catch (Exception e) {
+                    logger.debug("Error cerrando recognizer: {}", e.getMessage());
+                }
+            } finally {
+                // SIEMPRE limpiar la referencia
+                recognizer = null;
+            }
+        }
+    }
+
+    /**
+     * Consulta si la transcripción está en ejecución.
+     *
+     * @return true si la transcripción está activa, false en caso contrario
+     */
+    public boolean isRunning() {
+        return running.get();
+    }
+
     /**
      * Extrae el texto del resultado JSON completo de Vosk.
      * 

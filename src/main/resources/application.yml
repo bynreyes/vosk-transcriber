@@ -1,0 +1,50 @@
+# Configuración de la Aplicación Vosk Transcriber
+# Archivo: src/main/resources/application.yml
+
+app:
+  name: "Vosk Transcriber"
+  version: "1.0"
+
+# Configuración de rutas
+paths:
+  model: "./models/vosk-model-es-0.42"
+  transcriptions: "./transcriptions"
+  defaultLiveFile: "live_transcription.txt"
+
+# Configuración de audio
+audio:
+  sampleRate: 16000.0        # Hz (requerido por Vosk)
+  sampleBits: 16             # bits (requerido por Vosk)
+  channels: 1                # mono (requerido por Vosk)
+  bufferSize: 4096           # bytes (~0.25 segundos)
+
+# Configuración de UI
+ui:
+  windowWidth: 480
+  windowHeight: 420
+  title: "Vosk Transcriber"
+
+  colors:
+    bg1:       "212,224,155"      # Color de fondo primario
+    bg2:       "246,244,210"      # Color de fondo secundario
+    bg3:       "203,223,189"      # Color de fondo terciario
+    accent:    "241,156,121"      # Color de acento (botones)
+    text:      "70,63,58"         # Color de texto
+
+# Configuración de timeouts
+timeouts:
+  swingWorkerSeconds: 5      # Timeout para SwingWorker
+  voskInitSeconds: 10        # Timeout para inicializar Vosk
+  microphoneReadMs: 10       # Sleep cuando no hay datos
+
+# Configuración de logging
+logging:
+  level: "INFO"
+  format: "[%d{HH:mm:ss}] %-5p %c{1} - %m%n"
+
+# Configuración de transcripción
+transcription:
+  autoAppend: true           # Guardar automáticamente en archivo
+  showPartialResults: true   # Mostrar resultados parciales (...)
+  saveFinalResult: true      # Guardar resultado final
+

@@ -25,6 +25,9 @@ dependencies {
     // JSON - Para parsear resultados de Vosk
     implementation("org.json:json:20230227")
 
+    // YAML - Para cargar configuración desde application.yml
+    implementation("org.yaml:snakeyaml:2.0")
+
     // Logging
     implementation("org.slf4j:slf4j-api:2.0.12")
     implementation("org.slf4j:slf4j-simple:2.0.12")
