@@ -2,7 +2,7 @@
 
 Proyecto de clase de OOP with JAVA
 
-Autores: noria y ingcognito 🧑‍🎓
+Autores: nreyes y  nelson ruiz
 
 Descripción
 -----------
@@ -50,6 +50,12 @@ Los textos resultantes se guardan en `transcriptions/`.
 .\gradlew.bat run --args="--mic"
 ```
 
+4) Transcripción en tiempo real por medio de una interfaz grafica simple 🎙️
+
+```cmd
+.\gradlew.bat run --args="--gui"
+```
+
 Mientras se transcribe en tiempo real, las frases completas se mostrarán por consola y se irán guardando (append) en `transcriptions/live_transcription.txt`. Pulsa Ctrl+C para detener; la transcripción final también se guardará.
 
 Estructura del proyecto (resumen) 🗂️
@@ -60,7 +66,7 @@ Estructura del proyecto (resumen) 🗂️
 
 Roadmap / Características propuestas 🛣️
 ------------------------------------
-Prioridad alta 🔥
+Ideas a Considerar 🚧
 - 🖥️ Interfaz gráfica de usuario (GUI) para:
   - Seleccionar archivos o carpetas
   - Iniciar/parar transcripción en tiempo real
@@ -75,7 +81,7 @@ Ideas a medio plazo ⚙️
 - ✍️ Mejor gestión de puntuación y mayúsculas a partir del texto bruto
 - ⏱️ Marcas de tiempo por frase y exportación a formatos con timestamps (subtitulos, archivos .srt)
 
-Ideas a largo plazo 🚧
+Prioritario 🔥
 - 🌐 Interfaz web para subir audios y ver transcripciones
 - ☁️ Integración con servicios de almacenamiento (Google Drive, Dropbox)
 - 🤖 Integración con asistentes virtuales (Alexa, Google Assistant, otros)
